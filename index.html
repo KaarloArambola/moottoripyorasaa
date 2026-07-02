@@ -66,8 +66,10 @@
 <body>
 
     <div id="sidebar">
-        <h2>🏍️ Sääreitit (Eurooppa)</h2>
+        <h2>🏍️ Sääreitit (ORS)</h2>
         
+        <input type="hidden" id="apiKey" value=eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjliNjBlMDRkNWY3MjQzMjNiMzEzZWFmNzBhYWYzYzZkIiwiaCI6Im11cm11cjY0In0=>
+
         <div class="input-group">
             <label for="start">Mistä:</label>
             <input type="text" id="start" placeholder="Esim. Helsinki" value="Helsinki">
@@ -75,7 +77,15 @@
 
         <div class="input-group">
             <label for="end">Mihin:</label>
-            <input text="text" id="end" placeholder="Esim. Tampere" value="Tampere">
+            <input type="text" id="end" placeholder="Esim. Tampere" value="Tampere">
+        </div>
+
+        <div class="input-group">
+            <label for="routeProfile">Reittityyppi:</label>
+            <select id="routeProfile">
+                <option value="isot-tiet">Isot tiet (Nopein autoreitti)</option>
+                <option value="pikkutiet">Pikkutiet & Mutkat (Vältä moottoriteitä)</option>
+            </select>
         </div>
 
         <div class="input-group">
@@ -109,7 +119,6 @@
         var reittiViiva = null;
         var merkit = [];
 
-        // Kansainväliset WMO-sääkoodikäännökset suomeksi
         const wmoSaaKaannokset = {
             0: "Selkeää", 1: "Melko selkeää", 2: "Puolipilvistä", 3: "Pilvistä",
             45: "Sumua", 48: "Huurresumua",
@@ -126,7 +135,6 @@
 
         async function haeKoordinaatit(paikka) {
             try {
-                // Poistettu Suomi-rajoitus, jotta haku toimii koko Euroopassa
                 var url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(paikka)}`;
                 var vastaus = await fetch(url);
                 var data = await vastaus.json();
@@ -137,19 +145,45 @@
             return null;
         }
 
-        async function haeTieReitti(lahto, maaranpaa) {
+        async function haeTieReittiORS(lahto, maaranpaa, tyyppi, apiKey) {
             try {
-                var url = `https://router.project-osrm.org/route/v1/driving/${lahto[1]},${lahto[0]};${maaranpaa[1]},${maaranpaa[0]}?overview=full&geometries=geojson`;
-                var vastaus = await fetch(url);
+                var url = `https://api.openrouteservice.org/v2/directions/driving-car/geojson`;
+                
+                var pyyntoBody = {
+                    coordinates: [[lahto[1], lahto[0]], [maaranpaa[1], maaranpaa[0]]]
+                };
+
+                if (tyyppi === "pikkutiet") {
+                    pyyntoBody.options = {
+                        avoid_features: ["highways"]
+                    };
+                }
+
+                var vastaus = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'Authorization': apiKey
+                    },
+                    body: JSON.stringify(pyyntoBody)
+                });
+                
                 var data = await vastaus.json();
-                if (data && data.routes && data.routes.length > 0) return data.routes[0];
+                
+                if (data && data.features && data.features.length > 0) {
+                    var feature = data.features[0];
+                    return {
+                        coordinates: feature.geometry.coordinates,
+                        duration: feature.properties.summary.duration,
+                        distance: feature.properties.summary.distance
+                    };
+                }
             } catch (e) {
-                console.error("Reittihaku epäonnistui", e);
+                console.error("Reittihaku ORS:sta epäonnistui", e);
             }
             return null;
         }
 
-        // --- UUSITTU: OPEN-METEO SÄÄN HAKU ---
         async function haeOpenMeteoSaa(lat, lon) {
             try {
                 var url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation,weather_code&timezone=auto`;
@@ -161,7 +195,6 @@
             return null;
         }
 
-        // --- UUSITTU: SÄÄDATAN TULKINTA ---
         function tulkitseSaaTulevaisuudessa(openMeteoData, tavoiteAika) {
             if (!openMeteoData || !openMeteoData.hourly || !openMeteoData.hourly.time) return null;
             
@@ -169,7 +202,6 @@
             var valittuIndeksi = 0;
             var pieninEro = Infinity;
             
-            // EtsitäänOpen-Meteon tunti-ennusteista lähinnä tavoiteaikaamme oleva hetki
             for (var i = 0; i < aikasarja.length; i++) {
                 var ennusteAika = new Date(aikasarja[i]);
                 var ero = Math.abs(ennusteAika - tavoiteAika);
@@ -197,9 +229,18 @@
             var lahtoPaikka = document.getElementById('start').value;
             var maaranPaikka = document.getElementById('end').value;
             var valittuViiveTunnit = parseInt(document.getElementById('startTime').value);
+            var reittiProfiili = document.getElementById('routeProfile').value;
+            var apiKey = document.getElementById('apiKey').value;
+
             var statusKentta = document.getElementById('status');
             var infoLaatikko = document.getElementById('info-box');
             var suositusLaatikko = document.getElementById('recommendation-box');
+
+            if (!apiKey || apiKey === "TÄHÄN_SINUN_ORS_API_AVAIMESI") {
+                statusKentta.innerText = "Virhe: API-avain puuttuu.";
+                alert("Avaa kooditiedostosi ja vaihda tekstin 'TÄHÄN_SINUN_ORS_API_AVAIMESI' tilalle oma oikea OpenRouteService-avaimesi.");
+                return;
+            }
 
             statusKentta.innerText = "Etsitään paikkoja...";
             infoLaatikko.style.display = "none";
@@ -217,14 +258,14 @@
                 return;
             }
 
-            statusKentta.innerText = "Lasketaan reittiä...";
-            var reittiData = await haeTieReitti(lahtoKoord, maaranKoord);
+            statusKentta.innerText = "Lasketaan reittiä OpenRouteServicestä...";
+            var reittiData = await haeTieReittiORS(lahtoKoord, maaranKoord, reittiProfiili, apiKey);
             if (!reittiData) {
-                statusKentta.innerText = "Virhe: Reittiä ei voitu laskea.";
+                statusKentta.innerText = "Virhe: Reittiä ei voitu laskea. Tarkista API-avain koodista.";
                 return;
             }
 
-            var tiePisteet = reittiData.geometry.coordinates.map(piste => [piste[1], piste[0]]);
+            var tiePisteet = reittiData.coordinates.map(piste => [piste[1], piste[0]]);
             reittiViiva = L.polyline(tiePisteet, {color: '#ff9800', weight: 5}).addTo(map);
             map.fitBounds(reittiViiva.getBounds(), {padding: [50, 50]});
 
@@ -249,7 +290,7 @@
             }
             pisteet.push({ indeksi: tiePisteet.length - 1, nimi: "Määränpää", viive: matkaAikaMinuutit });
 
-            statusKentta.innerText = "Ladataan Open-Meteo sääennusteita...";
+            statusKentta.innerText = "Ladataan Open-Meteo sääennusteita matkalle...";
 
             var pisteidenSaaDatat = [];
             for (var p of pisteet) {
