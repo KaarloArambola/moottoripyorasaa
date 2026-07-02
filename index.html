@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
     <style>
-        /* Varmistetaan että elementtien koot lasketaan oikein mobiilissa */
         * { box-sizing: border-box; }
 
         body, html {
@@ -57,27 +56,17 @@
         .rainy { border-left-color: #2196f3 !important; background: #263238; }
         #map { flex-grow: 1; height: 100%; }
 
-        /* --- MOBIILIASENTELU (Käynnistyy kun ruutu on kapea) --- */
         @media (max-width: 768px) {
-            body {
-                flex-direction: column; /* Muuttaa rinnakkaisen asettelun päällekkäiseksi */
-            }
-            #sidebar {
-                width: 100%;
-                height: 45%; /* Vie vajaa puolet näytön korkeudesta */
-                box-shadow: 0 2px 10px rgba(0,0,0,0.5);
-            }
-            #map {
-                width: 100%;
-                height: 55%; /* Kartta ottaa loput tilasta haltuun */
-            }
+            body { flex-direction: column; }
+            #sidebar { width: 100%; height: 45%; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+            #map { width: 100%; height: 55%; }
         }
     </style>
 </head>
 <body>
 
     <div id="sidebar">
-        <h2>🏍️ Sääreitit</h2>
+        <h2>🏍️ Sääreitit (Eurooppa)</h2>
         
         <div class="input-group">
             <label for="start">Mistä:</label>
@@ -86,7 +75,7 @@
 
         <div class="input-group">
             <label for="end">Mihin:</label>
-            <input type="text" id="end" placeholder="Esim. Tampere" value="Tampere">
+            <input text="text" id="end" placeholder="Esim. Tampere" value="Tampere">
         </div>
 
         <div class="input-group">
@@ -120,19 +109,25 @@
         var reittiViiva = null;
         var merkit = [];
 
-        const saaKaannokset = {
-            "clearsky": "Selkeää", "fair": "Melko selkeää", "partlycloudy": "Puolipilvistä",
-            "cloudy": "Pilvistä", "lightrain": "Heikkoa vesisadetta", "rain": "Vesisadetta",
-            "heavyrain": "Rankkasadetta", "lightrainshowers": "Heikkoja sadekuuroja",
-            "rainshowers": "Sadekuuroja", "heavyrainshowers": "Voimakkaita sadekuuroja",
-            "thunder": "Ukkosta", "snow": "Lumisadetta", "sleet": "Räntäsadetta", "fog": "Sumua",
-            "rainandthunder": "Ukkossadetta", "lightrainandthunder": "Heikkoa ukkossadetta",
-            "heavyrainandthunder": "Voimakasta ukkossadetta"
+        // Kansainväliset WMO-sääkoodikäännökset suomeksi
+        const wmoSaaKaannokset = {
+            0: "Selkeää", 1: "Melko selkeää", 2: "Puolipilvistä", 3: "Pilvistä",
+            45: "Sumua", 48: "Huurresumua",
+            51: "Heikkoa tihkusadetta", 53: "Tihkusadetta", 55: "Voimakasta tihkusadetta",
+            56: "Jäätävää tihkua", 57: "Voimakasta jäätävää tihkua",
+            61: "Heikkoa vesisadetta", 63: "Vesisadetta", 65: "Rankkasadetta",
+            66: "Heikkoa jäätävää sadetta", 67: "Voimakasta jäätävää sadetta",
+            71: "Heikkoa lumisadetta", 73: "Lumisadetta", 75: "Rankkaa lumisadetta",
+            77: "Lumijyväsiä",
+            80: "Heikkoja sadekuuroja", 81: "Sadekuuroja", 82: "Rankkoja sadekuuroja",
+            85: "Heikkoja lumikuuroja", 86: "Voimakkaita lumikuuroja",
+            95: "Ukkosta", 96: "Ukkosta ja raesadetta", 99: "Voimakasta ukkosta ja raesadetta"
         };
 
         async function haeKoordinaatit(paikka) {
             try {
-                var url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(paikka)}&countrycodes=fi`;
+                // Poistettu Suomi-rajoitus, jotta haku toimii koko Euroopassa
+                var url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(paikka)}`;
                 var vastaus = await fetch(url);
                 var data = await vastaus.json();
                 if (data && data.length > 0) return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
@@ -154,45 +149,42 @@
             return null;
         }
 
-        async function haeYrSaa(lat, lon) {
+        // --- UUSITTU: OPEN-METEO SÄÄN HAKU ---
+        async function haeOpenMeteoSaa(lat, lon) {
             try {
-                var pyoristettyLat = lat.toFixed(4);
-                var pyoristettyLon = lon.toFixed(4);
-                var url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${pyoristettyLat}&lon=${pyoristettyLon}`;
-                var vastaus = await fetch(url, {
-                    headers: { 'User-Agent': 'MotoristinSaareitit/1.0 (motoristinsaapalvelu@gmail.com)' }
-                });
+                var url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation,weather_code&timezone=auto`;
+                var vastaus = await fetch(url);
                 if (vastaus.ok) return await vastaus.json();
             } catch (e) {
-                console.error("Säänhaku epäonnistui:", e);
+                console.error("Sään haku Open-Meteosta epäonnistui:", e);
             }
             return null;
         }
 
-        function tulkitseSaaTulevaisuudessa(yrData, tavoiteAika) {
-            if (!yrData || !yrData.properties || !yrData.properties.timeseries) return null;
+        // --- UUSITTU: SÄÄDATAN TULKINTA ---
+        function tulkitseSaaTulevaisuudessa(openMeteoData, tavoiteAika) {
+            if (!openMeteoData || !openMeteoData.hourly || !openMeteoData.hourly.time) return null;
             
-            var aikasarja = yrData.properties.timeseries;
-            var valittuEnnuste = aikasarja[0];
+            var aikasarja = openMeteoData.hourly.time;
+            var valittuIndeksi = 0;
             var pieninEro = Infinity;
             
+            // EtsitäänOpen-Meteon tunti-ennusteista lähinnä tavoiteaikaamme oleva hetki
             for (var i = 0; i < aikasarja.length; i++) {
-                var ennusteAika = new Date(aikasarja[i].time);
+                var ennusteAika = new Date(aikasarja[i]);
                 var ero = Math.abs(ennusteAika - tavoiteAika);
                 if (ero < pieninEro) {
                     pieninEro = ero;
-                    valittuEnnuste = aikasarja[i];
+                    valittuIndeksi = i;
                 }
             }
             
-            var data1h = valittuEnnuste.data.next_1_hours;
-            var lampotila = valittuEnnuste.data.instant.details.air_temperature;
-            var saaKoodi = data1h ? data1h.summary.symbol_code : "tuntematon";
-            var sademaara = data1h ? data1h.details.precipitation_amount : 0;
+            var lampotila = openMeteoData.hourly.temperature_2m[valittuIndeksi];
+            var sademaara = openMeteoData.hourly.precipitation[valittuIndeksi];
+            var saaKoodi = openMeteoData.hourly.weather_code[valittuIndeksi];
 
-            var puhdasKoodi = saaKoodi.split('_')[0];
-            var suomiKuvaus = saaKaannokset[puhdasKoodi] || "Epävakaata";
-            var kello = new Date(valittuEnnuste.time).toLocaleTimeString('fi-FI', {hour: '2-digit', minute:'2-digit'});
+            var suomiKuvaus = wmoSaaKaannokset[saaKoodi] || "Vaihtelevaa";
+            var kello = new Date(aikasarja[valittuIndeksi]).toLocaleTimeString('fi-FI', {hour: '2-digit', minute:'2-digit'});
 
             return {
                 teksti: `${suomiKuvaus}, ${Math.round(lampotila)}°C`,
@@ -257,12 +249,12 @@
             }
             pisteet.push({ indeksi: tiePisteet.length - 1, nimi: "Määränpää", viive: matkaAikaMinuutit });
 
-            statusKentta.innerText = "Ladataan sääennusteita ja optimoidaan aikataulua...";
+            statusKentta.innerText = "Ladataan Open-Meteo sääennusteita...";
 
             var pisteidenSaaDatat = [];
             for (var p of pisteet) {
                 var koord = tiePisteet[p.indeksi];
-                var sData = await haeYrSaa(koord[0], koord[1]);
+                var sData = await haeOpenMeteoSaa(koord[0], koord[1]);
                 pisteidenSaaDatat.push(sData);
             }
 
