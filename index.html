@@ -14,7 +14,7 @@
             background-color: #121212; color: #e0e0e0; display: flex;
         }
         #sidebar {
-            width: 340px; background-color: #1e1e1e; padding: 20px;
+            width: 350px; background-color: #1e1e1e; padding: 20px;
             box-shadow: 2px 0 10px rgba(0,0,0,0.5); display: flex;
             flex-direction: column; gap: 15px; z-index: 1000;
             overflow-y: auto;
@@ -35,8 +35,16 @@
         }
         button:hover { background-color: #e65100; }
         #status { color: #ffb74d; font-size: 0.9rem; font-style: italic; }
+        
+        /* Suosituslaatikko */
+        #recommendation-box {
+            padding: 12px; border-radius: 5px; font-size: 0.95rem;
+            font-weight: bold; display: none; margin-top: 5px;
+            border-left: 5px solid #ff9800; background-color: #2a251e;
+        }
+        
         #info-box {
-            margin-top: 15px; padding: 10px; background-color: #2d2d2d;
+            margin-top: 5px; padding: 10px; background-color: #2d2d2d;
             border-radius: 5px; font-size: 0.9rem; display: none;
         }
         .weather-info {
@@ -63,7 +71,7 @@
         </div>
 
         <div class="input-group">
-            <label for="startTime">Lähtöaika:</label>
+            <label for="startTime">Toivottu lähtöaika:</label>
             <select id="startTime">
                 <option value="0">Heti</option>
                 <option value="1">+1 tunti</option>
@@ -72,9 +80,10 @@
             </select>
         </div>
 
-        <button onclick="haeReitti()">Laske sääreitti</button>
+        <button onclick="haeReitti()">Laske ja optimoi ajoitus</button>
         
         <div id="status"></div>
+        <div id="recommendation-box"></div>
         <div id="info-box"></div>
     </div>
 
@@ -83,7 +92,6 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
-        // Alustetaan kartta
         var map = L.map('map').setView([62.5, 26], 6);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -98,7 +106,9 @@
             "cloudy": "Pilvistä", "lightrain": "Heikkoa vesisadetta", "rain": "Vesisadetta",
             "heavyrain": "Rankkasadetta", "lightrainshowers": "Heikkoja sadekuuroja",
             "rainshowers": "Sadekuuroja", "heavyrainshowers": "Voimakkaita sadekuuroja",
-            "thunder": "Ukkosta", "snow": "Lumisadetta", "sleet": "Räntäsadetta", "fog": "Sumua"
+            "thunder": "Ukkosta", "snow": "Lumisadetta", "sleet": "Räntäsadetta", "fog": "Sumua",
+            "rainandthunder": "Ukkossadetta", "lightrainandthunder": "Heikkoa ukkossadetta",
+            "heavyrainandthunder": "Voimakasta ukkossadetta"
         };
 
         async function haeKoordinaatit(paikka) {
@@ -140,11 +150,21 @@
             return null;
         }
 
-        function tulkitseSaaTulevaisuudessa(yrData, tunnitTastaHetkesta) {
+        function tulkitseSaaTulevaisuudessa(yrData, tavoiteAika) {
             if (!yrData || !yrData.properties || !yrData.properties.timeseries) return null;
             
             var aikasarja = yrData.properties.timeseries;
-            var valittuEnnuste = aikasarja[tunnitTastaHetkesta] || aikasarja[0];
+            var valittuEnnuste = aikasarja[0];
+            var pieninEro = Infinity;
+            
+            for (var i = 0; i < aikasarja.length; i++) {
+                var ennusteAika = new Date(aikasarja[i].time);
+                var ero = Math.abs(ennusteAika - tavoiteAika);
+                if (ero < pieninEro) {
+                    pieninEro = ero;
+                    valittuEnnuste = aikasarja[i];
+                }
+            }
             
             var data1h = valittuEnnuste.data.next_1_hours;
             var lampotila = valittuEnnuste.data.instant.details.air_temperature;
@@ -152,10 +172,8 @@
             var sademaara = data1h ? data1h.details.precipitation_amount : 0;
 
             var puhdasKoodi = saaKoodi.split('_')[0];
-            var suomiKuvaus = saaKaannokset[puhdasKoodi] || saaKoodi;
-
-            var kelloIsoString = valittuEnnuste.time; 
-            var kello = new Date(kelloIsoString).toLocaleTimeString('fi-FI', {hour: '2-digit', minute:'2-digit'});
+            var suomiKuvaus = saaKaannokset[puhdasKoodi] || "Epävakaata";
+            var kello = new Date(valittuEnnuste.time).toLocaleTimeString('fi-FI', {hour: '2-digit', minute:'2-digit'});
 
             return {
                 teksti: `${suomiKuvaus}, ${Math.round(lampotila)}°C`,
@@ -167,12 +185,14 @@
         async function haeReitti() {
             var lahtoPaikka = document.getElementById('start').value;
             var maaranPaikka = document.getElementById('end').value;
-            var lahtoViiveTunnit = parseInt(document.getElementById('startTime').value);
+            var valittuViiveTunnit = parseInt(document.getElementById('startTime').value);
             var statusKentta = document.getElementById('status');
             var infoLaatikko = document.getElementById('info-box');
+            var suositusLaatikko = document.getElementById('recommendation-box');
 
             statusKentta.innerText = "Etsitään paikkoja...";
             infoLaatikko.style.display = "none";
+            suositusLaatikko.style.display = "none";
 
             if (reittiViiva) map.removeLayer(reittiViiva);
             merkit.forEach(m => map.removeLayer(m));
@@ -187,7 +207,6 @@
             }
 
             statusKentta.innerText = "Lasketaan reittiä...";
-
             var reittiData = await haeTieReitti(lahtoKoord, maaranKoord);
             if (!reittiData) {
                 statusKentta.innerText = "Virhe: Reittiä ei voitu laskea.";
@@ -195,7 +214,6 @@
             }
 
             var tiePisteet = reittiData.geometry.coordinates.map(piste => [piste[1], piste[0]]);
-            
             reittiViiva = L.polyline(tiePisteet, {color: '#ff9800', weight: 5}).addTo(map);
             map.fitBounds(reittiViiva.getBounds(), {padding: [50, 50]});
 
@@ -203,6 +221,73 @@
             var etaisyysKm = (reittiData.distance / 1000).toFixed(1);
             var aikaTeksti = matkaAikaMinuutit > 60 ? `${Math.floor(matkaAikaMinuutit/60)} t ${matkaAikaMinuutit%60} min` : `${matkaAikaMinuutit} min`;
 
+            // Luodaan tarkastuspisteet (0h, 1h... ja määränpää)
+            var pisteet = [];
+            pisteet.push({ indeksi: 0, nimi: "Lähtöpaikka", viive: 0 });
+            
+            var tuntejaMatkassa = Math.floor(matkaAikaMinuutit / 60);
+            for (var t = 1; t <= tuntejaMatkassa; t++) {
+                var vMin = t * 60;
+                if (matkaAikaMinuutit - vMin > 15) {
+                    var suhde = vMin / matkaAikaMinuutit;
+                    pisteet.push({
+                        indeksi: Math.floor(suhde * (tiePisteet.length - 1)),
+                        nimi: `Ajettu ${t} t`,
+                        viive: vMin
+                    });
+                }
+            }
+            pisteet.push({ indeksi: tiePisteet.length - 1, nimi: "Määränpää", viive: matkaAikaMinuutit });
+
+            statusKentta.innerText = "Ladataan sääennusteita ja optimoidaan aikataulua...";
+
+            // Haetaan kaikkien pisteiden raaka säädata valmiiksi muistiin yhdellä kertaa
+            var pisteidenSaaDatat = [];
+            for (var p of pisteet) {
+                var koord = tiePisteet[p.indeksi];
+                var sData = await haeYrSaa(koord[0], koord[1]);
+                pisteidenSaaDatat.push(sData);
+            }
+
+            // --- ÄLYKÄS AIKATAULUN VERTAILU ---
+            // Lasketaan kokonaissademäärä kolmelle eri skenaariolle: Valittu aika, +1h ja +2h
+            var skenaariot = [valittuViiveTunnit, valittuViiveTunnit + 1, valittuViiveTunnit + 2];
+            var skenaarioTulokset = [];
+
+            for (var viive of skenaariot) {
+                var kokonaisSade = 0;
+                var tulkitutSäät = [];
+
+                for (var i = 0; i < pisteet.length; i++) {
+                    var tAika = new Date();
+                    tAika.setMinutes(tAika.getMinutes() + (viive * 60) + pisteet[i].viive);
+                    var tulos = tulkitseSaaTulevaisuudessa(pisteidenSaaDatat[i], tAika);
+                    if (tulos) {
+                        kokonaisSade += tulos.sade;
+                        tulkitutSäät.push(tulos);
+                    }
+                }
+                skenaarioTulokset.push({ viive: viive, kokonaisSade: kokonaisSade, saas: tulkitutSäät });
+            }
+
+            // Valitaan paras (vähiten sadetta)
+            var valittuSkenaario = skenaarioTulokset[0]; // Nykyinen valinta
+            var parasSkenaario = skenaarioTulokset.reduce((prev, current) => (prev.kokonaisSade <= current.kokonaisSade) ? prev : current);
+
+            // Tulostetaan suositusteksti
+            suositusLaatikko.style.display = "block";
+            if (parasSkenaario.viive === valittuViiveTunnit) {
+                suositusLaatikko.style.color = "#4caf50";
+                suositusLaatikko.style.borderLeftColor = "#4caf50";
+                suositusLaatikko.innerHTML = "💡 Suositus: Valitsemasi lähtöaika on kuivin vaihtoehto!";
+            } else {
+                var tuntiEro = parasSkenaario.viive - valittuViiveTunnit;
+                suositusLaatikko.style.color = "#ff9800";
+                suositusLaatikko.style.borderLeftColor = "#ff9800";
+                suositusLaatikko.innerHTML = `⚠️ Suositus: Siirrä lähtöä +${tuntiEro} tunti(a) eteenpäin! Vältät sillä sateita matkan varrella.`;
+            }
+
+            // Piirretään valitun skenaarion sää tiedot näkyviin (kartta ja lista)
             infoLaatikko.innerHTML = `
                 <strong>Matkatiedot:</strong><br>
                 📋 ${etaisyysKm} km | ⏱️ ${aikaTeksti}<br><br>
@@ -212,22 +297,10 @@
             infoLaatikko.style.display = "block";
             var saaListaElementti = document.getElementById('weather-list');
 
-            // Palataan kolmeen varmaan pisteeseen ilman monimutkaisia looppeja
-            var pituus = tiePisteet.length;
-            var pisteIndeksit = [
-                { indeksi: 0, nimi: "Lähtöpaikka", viiveMinuutit: 0 },
-                { indeksi: Math.floor(pituus / 2), nimi: "Puoliväli", viiveMinuutit: matkaAikaMinuutit / 2 },
-                { indeksi: pituus - 1, nimi: "Määränpää", viiveMinuutit: matkaAikaMinuutit }
-            ];
-
-            for (var p of pisteIndeksit) {
+            for (var i = 0; i < pisteet.length; i++) {
+                var p = pisteet[i];
                 var koordinaatit = tiePisteet[p.indeksi];
-                var kokonaisViiveTunnit = lahtoViiveTunnit + Math.round(p.viiveMinuutit / 60);
-
-                statusKentta.innerText = `Haetaan säädataa: ${p.nimi}...`;
-
-                var rawSaa = await haeYrSaa(koordinaatit[0], koordinaatit[1]);
-                var saa = tulkitseSaaTulevaisuudessa(rawSaa, kokonaisViiveTunnit);
+                var saa = valittuSkenaario.saas[i];
 
                 if (saa) {
                     var sateenVariLuokka = saa.sade > 0 ? 'rainy' : '';
@@ -245,7 +318,7 @@
                 }
             }
 
-            statusKentta.innerText = "Sääreitti laskettu onnistuneesti!";
+            statusKentta.innerText = "Sääreitti ja ajoitus optimoitu!";
         }
     </script>
 </body>
