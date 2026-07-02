@@ -34,6 +34,10 @@
         }
         button:hover { background-color: #e65100; }
         #status { color: #ffb74d; font-size: 0.9rem; font-style: italic; }
+        #info-box {
+            margin-top: 15px; padding: 10px; background-color: #2d2d2d;
+            border-radius: 5px; font-size: 0.9rem; display: none;
+        }
         #map { flex-grow: 1; height: 100%; }
     </style>
 </head>
@@ -55,6 +59,8 @@
         <button onclick="haeReitti()">Laske kuiva reitti</button>
         
         <div id="status"></div>
+        
+        <div id="info-box"></div>
     </div>
 
     <div id="map"></div>
@@ -68,61 +74,91 @@
             attribution: '© OpenStreetMap, © CARTO'
         }).addTo(map);
 
-        // Tallennetaan karttamerkit ja viivat muuttujiin, jotta voimme poistaa vanhat uuden haun tieltä
         var reittiViiva = null;
         var merkit = [];
 
-        // Apufunktio, joka hakee paikan koordinaatit nimen perusteella
         async function haeKoordinaatit(paikka) {
             var url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(paikka)}&countrycodes=fi`;
-            
             var vastaus = await fetch(url);
             var data = await vastaus.json();
-            
             if (data && data.length > 0) {
-                // Palautetaan leveysaste (lat) ja pituusaste (lon) numeroina
                 return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
             }
             return null;
         }
 
-        // Pääfunktio
+        // UUSI FUNKTIO: Hakee oikean tiereitin kahden pisteen välille
+        async function haeTieReitti(lahto, maaranpaa) {
+            // OSRM vaatii koordinaatit muodossa: pituusaste,leveysaste (lon,lat)
+            var url = `https://router.project-osrm.org/route/v1/driving/${lahto[1]},${lahto[0]};${maaranpaa[1]},${maaranpaa[0]}?overview=full&geometries=geojson`;
+            
+            var vastaus = await fetch(url);
+            var data = await vastaus.json();
+            
+            if (data && data.routes && data.routes.length > 0) {
+                return data.routes[0]; // Palautetaan parhain reittivaihtoehto
+            }
+            return null;
+        }
+
         async function haeReitti() {
             var lahtoPaikka = document.getElementById('start').value;
             var maaranPaikka = document.getElementById('end').value;
             var statusKentta = document.getElementById('status');
+            var infoLaatikko = document.getElementById('info-box');
 
             statusKentta.innerText = "Esitellään paikkoja...";
+            infoLaatikko.style.display = "none";
 
-            // Tyhjennetään vanhat piirrokset kartalta
             if (reittiViiva) map.removeLayer(reittiViiva);
             merkit.forEach(m => map.removeLayer(m));
             merkit = [];
 
-            // Haetaan molempien paikkojen koordinaatit yhtä aikaa
             var lahtoKoord = await haeKoordinaatit(lahtoPaikka);
             var maaranKoord = await haeKoordinaatit(maaranPaikka);
 
             if (!lahtoKoord || !maaranKoord) {
-                statusKentta.innerText = "Virhe: Paikkaa ei löytynyt Suomesta.";
+                statusKentta.innerText = "Virhe: Paikkaa ei löytynyt.";
                 return;
             }
 
-            statusKentta.innerText = "Paikat löydetty! Piirretään suora viiva...";
+            statusKentta.innerText = "Lasketaan maantiereittiä...";
 
-            // Lisätään merkit kartalle
-            var m1 = L.marker(lahtoKoord).addTo(map).bindPopup(lahtoPaikka);
-            var m2 = L.marker(maaranKoord).addTo(map).bindPopup(maaranPaikka);
-            merkit.push(m1, m2);
+            // Haetaan oikea reitti OSRM-palvelusta
+            var reittiData = await haeTieReitti(lahtoKoord, maaranKoord);
 
-            // Piirretään suora viiva pisteiden välille (tämä korvataan myöhemmin oikealla tiereitillä)
-            reittiViiva = L.polyline([lahtoKoord, maaranKoord], {color: '#ff9800', weight: 4}).addTo(map);
+            if (!reittiData) {
+                statusKentta.innerText = "Virhe: Reittiä ei voitu laskea.";
+                return;
+            }
 
-            // Sovitetaan karttanäkymä niin, että molemmat pisteet näkyvät kerralla
-            var bounds = L.latLngBounds([lahtoKoord, maaranKoord]);
-            map.fitBounds(bounds, {padding: [50, 50]});
+            // OSRM palauttaa koordinaatit muodossa [lon, lat], Leaflet haluaa ne muodossa [lat, lon].
+            // Käännetään pisteet ympäri piirtämistä varten:
+            var tiePisteet = reittiData.geometry.coordinates.map(piste => [piste[1], piste[0]]);
 
-            statusKentta.innerText = "Valmis! Seuraavaksi haetaan oikeat tiet.";
+            // Lisätään merkit lähtöön ja maaliin
+            merkit.push(L.marker(lahtoKoord).addTo(map).bindPopup("Lähtö: " + lahtoPaikka));
+            merkit.push(L.marker(maaranKoord).addTo(map).bindPopup("Maali: " + maaranPaikka));
+
+            // Piirretään tieverkkoa seuraava viiva
+            reittiViiva = L.polyline(tiePisteet, {color: '#ff9800', weight: 5}).addTo(map);
+            
+            // Sovitetaan näkymä
+            map.fitBounds(reittiViiva.getBounds(), {padding: [50, 50]});
+
+            // Lasketaan matka ja aika (OSRM antaa matkan metreinä ja ajan sekunteina)
+            var etaisyysKm = (reittiData.distance / 1000).toFixed(1);
+            var aikaMin = Math.round(reittiData.duration / 60);
+            var tunnit = Math.floor(aikaMin / 60);
+            var minuutit = aikaMin % 60;
+            
+            var aikaTeksti = tunnit > 0 ? `${tunnit} t ${minuutit} min` : `${minuutit} min`;
+
+            // Näytetään tiedot käyttäjälle
+            infoLaatikko.innerHTML = `<strong>Matkatiedot:</strong><br>🛣️ Etäisyys: ${etaisyysKm} km<br>⏱️ Kesto: ${aikaTeksti}`;
+            infoLaatikko.style.display = "block";
+            
+            statusKentta.innerText = "Reitti haettu! Seuraavaksi tarkistetaan sää.";
         }
     </script>
 
