@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Motoristin Sääreitit (30 min välit)</title>
+    <title>Motoristin Sääreitit</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
@@ -83,7 +83,7 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
-        // Alustetaan kartta turvallisesti heti alussa
+        // Alustetaan kartta
         var map = L.map('map').setView([62.5, 26], 6);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -101,18 +101,12 @@
             "thunder": "Ukkosta", "snow": "Lumisadetta", "sleet": "Räntäsadetta", "fog": "Sumua"
         };
 
-        function odota(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
-
         async function haeKoordinaatit(paikka) {
             try {
                 var url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(paikka)}&countrycodes=fi`;
                 var vastaus = await fetch(url);
                 var data = await vastaus.json();
-                if (data && data.length > 0) {
-                    return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
-                }
+                if (data && data.length > 0) return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
             } catch (e) {
                 console.error("Koordinaattihaku epäonnistui", e);
             }
@@ -124,9 +118,7 @@
                 var url = `https://router.project-osrm.org/route/v1/driving/${lahto[1]},${lahto[0]};${maaranpaa[1]},${maaranpaa[0]}?overview=full&geometries=geojson`;
                 var vastaus = await fetch(url);
                 var data = await vastaus.json();
-                if (data && data.routes && data.routes.length > 0) {
-                    return data.routes[0];
-                }
+                if (data && data.routes && data.routes.length > 0) return data.routes[0];
             } catch (e) {
                 console.error("Reittihaku epäonnistui", e);
             }
@@ -134,17 +126,14 @@
         }
 
         async function haeYrSaa(lat, lon) {
-            var pyoristettyLat = lat.toFixed(4);
-            var pyoristettyLon = lon.toFixed(4);
-            var url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${pyoristettyLat}&lon=${pyoristettyLon}`;
-            
             try {
+                var pyoristettyLat = lat.toFixed(4);
+                var pyoristettyLon = lon.toFixed(4);
+                var url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${pyoristettyLat}&lon=${pyoristettyLon}`;
                 var vastaus = await fetch(url, {
                     headers: { 'User-Agent': 'MotoristinSaareitit/1.0 (motoristinsaapalvelu@gmail.com)' }
                 });
-                if (vastaus.ok) {
-                    return await vastaus.json();
-                }
+                if (vastaus.ok) return await vastaus.json();
             } catch (e) {
                 console.error("Säänhaku epäonnistui:", e);
             }
@@ -214,11 +203,50 @@
             var etaisyysKm = (reittiData.distance / 1000).toFixed(1);
             var aikaTeksti = matkaAikaMinuutit > 60 ? `${Math.floor(matkaAikaMinuutit/60)} t ${matkaAikaMinuutit%60} min` : `${matkaAikaMinuutit} min`;
 
-            var pisteidenMaara = tiePisteet.length;
-            var osioidenMaara = Math.max(1, Math.round(matkaAikaMinuutit / 30)); 
-            
             infoLaatikko.innerHTML = `
                 <strong>Matkatiedot:</strong><br>
                 📋 ${etaisyysKm} km | ⏱️ ${aikaTeksti}<br><br>
-                <strong>Sääennuste matkan varrelta (30 min välein):</strong>
-                <div id
+                <strong>Sääennuste matkan varrelta:</strong>
+                <div id="weather-list"></div>
+            `;
+            infoLaatikko.style.display = "block";
+            var saaListaElementti = document.getElementById('weather-list');
+
+            // Palataan kolmeen varmaan pisteeseen ilman monimutkaisia looppeja
+            var pituus = tiePisteet.length;
+            var pisteIndeksit = [
+                { indeksi: 0, nimi: "Lähtöpaikka", viiveMinuutit: 0 },
+                { indeksi: Math.floor(pituus / 2), nimi: "Puoliväli", viiveMinuutit: matkaAikaMinuutit / 2 },
+                { indeksi: pituus - 1, nimi: "Määränpää", viiveMinuutit: matkaAikaMinuutit }
+            ];
+
+            for (var p of pisteIndeksit) {
+                var koordinaatit = tiePisteet[p.indeksi];
+                var kokonaisViiveTunnit = lahtoViiveTunnit + Math.round(p.viiveMinuutit / 60);
+
+                statusKentta.innerText = `Haetaan säädataa: ${p.nimi}...`;
+
+                var rawSaa = await haeYrSaa(koordinaatit[0], koordinaatit[1]);
+                var saa = tulkitseSaaTulevaisuudessa(rawSaa, kokonaisViiveTunnit);
+
+                if (saa) {
+                    var sateenVariLuokka = saa.sade > 0 ? 'rainy' : '';
+                    var saaTekstiMuotoilu = `${saa.teksti} (Sade: ${saa.sade} mm)`;
+
+                    var marker = L.marker(koordinaatit).addTo(map);
+                    marker.bindPopup(`<b>${p.nimi} (Klo ${saa.aika})</b><br>${saaTekstiMuotoilu}`);
+                    merkit.push(marker);
+
+                    saaListaElementti.innerHTML += `
+                        <div class="weather-info ${sateenVariLuokka}">
+                            <strong>${p.nimi} (Klo ${saa.aika}):</strong><br>${saaTekstiMuotoilu}
+                        </div>
+                    `;
+                }
+            }
+
+            statusKentta.innerText = "Sääreitti laskettu onnistuneesti!";
+        }
+    </script>
+</body>
+</html>
