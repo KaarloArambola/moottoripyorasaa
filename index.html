@@ -50,7 +50,7 @@
 <body>
 
     <div id="sidebar">
-        <h2>🏍️ Sääreitit (yr.no)</h2>
+        <h2>🏍️ Sääreitit</h2>
         
         <div class="input-group">
             <label for="start">Mistä:</label>
@@ -82,6 +82,24 @@
         var reittiViiva = null;
         var merkit = [];
 
+        // Selkokieliset suomennokset yr.no:n yleisimmille sääkoodeille
+        const saaKaannokset = {
+            "clearsky": "Selkeää",
+            "fair": "Melko selkeää",
+            "partlycloudy": "Puolipilvistä",
+            "cloudy": "Pilvistä",
+            "lightrain": "Heikkoa vesisadetta",
+            "rain": "Vesisadetta",
+            "heavyrain": "Rankkasadetta",
+            "lightrainshowers": "Heikkoja sadekuuroja",
+            "rainshowers": "Sadekuuroja",
+            "heavyrainshowers": "Voimakkaita sadekuuroja",
+            "thunder": "Ukosta",
+            "snow": "Lumisadetta",
+            "sleet": "Räntäsadetta",
+            "fog": "Sumua"
+        };
+
         async function haeKoordinaatit(paikka) {
             var url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(paikka)}&countrycodes=fi`;
             var vastaus = await fetch(url);
@@ -98,9 +116,7 @@
             return null;
         }
 
-        // UUSI FUNKTIO: Hakee säätiedot yr.no (MET Norway) rajapinnasta
         async function haeYrSaa(lat, lon) {
-            // yr.no vaatii tarkan lat/lon muotoilun (4 desimaalia riittää)
             var pyoristettyLat = lat.toFixed(4);
             var pyoristettyLon = lon.toFixed(4);
             
@@ -109,8 +125,8 @@
             try {
                 var vastaus = await fetch(url, {
                     headers: {
-                        // yr.no sääntö: Kerrotaan kuka kysyy (voit muuttaa tähän oman nimesi myöhemmin)
-                        'User-Agent': 'MotoristinSääreititProjekti/1.0 opiskelijaprojekti'
+                        // HUOM: Muuta tähän alle oma sähköpostisi yr.no:n sääntöjen mukaisesti!
+                        'User-Agent': 'MotoristinSaareitit/1.0 (motoristinsaapalvelu@gmail.com)'
                     }
                 });
                 var data = await vastaus.json();
@@ -121,11 +137,9 @@
             }
         }
 
-        // Apufunktio, joka poimii yr.no:n datasta tämän hetken sään
         function tulkitseSaa(yrData) {
             if (!yrData || !yrData.properties || !yrData.properties.timeseries) return null;
             
-            // Otetaan ensimmäinen ennuste (eli nykyhetki)
             var nykyhetki = yrData.properties.timeseries[0];
             var data1h = nykyhetki.data.next_1_hours;
             
@@ -133,13 +147,15 @@
             var saaKoodi = data1h ? data1h.summary.symbol_code : "tuntematon";
             var sademaara = data1h ? data1h.details.precipitation_amount : 0;
 
-            // Muutetaan yr.no:n englanninkieliset sääkoodit (esim. 'clearsky', 'rain') vähän helpommaksi suomeksi
-            var suomiKuvaus = saaKoodi.replace(/_/g, ' '); // korvataan alaviivat välilyönneillä
+            // Poistetaan sääkoodista mahdolliset lisäosat kuten 'polartwilight' tai 'day'/'night'
+            var puhdasKoodi = saaKoodi.split('_')[0];
+
+            // Etsitään suomennos. Jos sitä ei löydy, käytetään raakaa koodia
+            var suomiKuvaus = saaKaannokset[puhdasKoodi] || saaKoodi;
 
             return {
                 teksti: `${suomiKuvaus}, ${Math.round(lampotila)}°C`,
-                sade: sademaara,
-                koodi: saaKoodi
+                sade: sademaara
             };
         }
 
@@ -164,7 +180,7 @@
                 return;
             }
 
-            statusKentta.innerText = "Haetaan yr.no säädataa ja reittiä...";
+            statusKentta.innerText = "Haetaan reittiä ja sääolosuhteita...";
 
             var reittiData = await haeTieReitti(lahtoKoord, maaranKoord);
             if (!reittiData) {
@@ -175,24 +191,20 @@
             var tiePisteet = reittiData.geometry.coordinates.map(piste => [piste[1], piste[0]]);
             var puoliValiKoord = tiePisteet[Math.floor(tiePisteet.length / 2)];
 
-            // Haetaan yr.no raakadata
             var rawLahto = await haeYrSaa(lahtoKoord[0], lahtoKoord[1]);
             var rawPuoli = await haeYrSaa(puoliValiKoord[0], puoliValiKoord[1]);
             var rawMaali = await haeYrSaa(maaranKoord[0], maaranKoord[1]);
 
-            // Tulkitaan data selkokielelle
             var saaLahto = tulkitseSaa(rawLahto);
             var saaPuoli = tulkitseSaa(rawPuoli);
             var saaMaali = tulkitseSaa(rawMaali);
 
-            // Piirretään reitti
             reittiViiva = L.polyline(tiePisteet, {color: '#ff9800', weight: 5}).addTo(map);
             map.fitBounds(reittiViiva.getBounds(), {padding: [50, 50]});
 
-            // Tekstit karttapalloihin
-            var tLahto = saaLahto ? `${saaLahto.teksti} (Sade: ${saaLahto.sade}mm)` : "Ei dataa";
-            var tPuoli = saaPuoli ? `${saaPuoli.teksti} (Sade: ${saaPuoli.sade}mm)` : "Ei dataa";
-            var tMaali = saaMaali ? `${saaMaali.teksti} (Sade: ${saaMaali.sade}mm)` : "Ei dataa";
+            var tLahto = saaLahto ? `${saaLahto.teksti} (Sade: ${saaLahto.sade} mm)` : "Ei dataa";
+            var tPuoli = saaPuoli ? `${saaPuoli.teksti} (Sade: ${saaPuoli.sade} mm)` : "Ei dataa";
+            var tMaali = saaMaali ? `${saaMaali.teksti} (Sade: ${saaMaali.sade} mm)` : "Ei dataa";
 
             merkit.push(L.marker(lahtoKoord).addTo(map).bindPopup(`<b>Lähtö: ${lahtoPaikka}</b><br>${tLahto}`));
             merkit.push(L.marker(puoliValiKoord).addTo(map).bindPopup(`<b>Puoliväli</b><br>${tPuoli}`));
@@ -202,7 +214,6 @@
             var aikaMin = Math.round(reittiData.duration / 60);
             var aikaTeksti = aikaMin > 60 ? `${Math.floor(aikaMin/60)} t ${aikaMin%60} min` : `${aikaMin} min`;
 
-            // Funktio, joka tarkistaa onko sadetta (jos sademäärä > 0)
             function sataako(saa) { return saa && saa.sade > 0; }
 
             infoLaatikko.innerHTML = `
