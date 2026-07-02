@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Motoristin Sääreitit (yr.no)</title>
+    <title>Motoristin Sääreitit (30 min välit)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
@@ -14,7 +14,7 @@
             background-color: #121212; color: #e0e0e0; display: flex;
         }
         #sidebar {
-            width: 320px; background-color: #1e1e1e; padding: 20px;
+            width: 340px; background-color: #1e1e1e; padding: 20px;
             box-shadow: 2px 0 10px rgba(0,0,0,0.5); display: flex;
             flex-direction: column; gap: 15px; z-index: 1000;
             overflow-y: auto;
@@ -22,11 +22,11 @@
         h2 { margin-top: 0; color: #ff9800; font-size: 1.4rem; }
         .input-group { display: flex; flex-direction: column; gap: 5px; }
         label { font-size: 0.85rem; color: #aaa; }
-        input {
+        input, select {
             background-color: #2d2d2d; border: 1px solid #444;
             color: #fff; padding: 10px; border-radius: 5px; font-size: 1rem;
         }
-        input:focus { border-color: #ff9800; outline: none; }
+        input:focus, select:focus { border-color: #ff9800; outline: none; }
         button {
             background-color: #ff9800; color: #121212; border: none;
             padding: 12px; border-radius: 5px; font-weight: bold;
@@ -40,10 +40,10 @@
             border-radius: 5px; font-size: 0.9rem; display: none;
         }
         .weather-info {
-            margin-top: 10px; padding: 8px; background: #383838; 
-            border-radius: 4px; border-left: 4px solid #4caf50; /* Vihreä = Pouta */
+            margin-top: 8px; padding: 8px; background: #383838; 
+            border-radius: 4px; border-left: 4px solid #4caf50;
         }
-        .rainy { border-left-color: #2196f3 !important; background: #263238; } /* Sininen = Sade */
+        .rainy { border-left-color: #2196f3 !important; background: #263238; }
         #map { flex-grow: 1; height: 100%; }
     </style>
 </head>
@@ -60,6 +60,16 @@
         <div class="input-group">
             <label for="end">Mihin:</label>
             <input type="text" id="end" placeholder="Esim. Tampere" value="Tampere">
+        </div>
+
+        <div class="input-group">
+            <label for="startTime">Lähtöaika:</label>
+            <select id="startTime">
+                <option value="0">Heti</option>
+                <option value="1">+1 tunti</option>
+                <option value="2">+2 tuntia</option>
+                <option value="3">+3 tuntia</option>
+            </select>
         </div>
 
         <button onclick="haeReitti()">Laske sääreitti</button>
@@ -82,22 +92,12 @@
         var reittiViiva = null;
         var merkit = [];
 
-        // Selkokieliset suomennokset yr.no:n yleisimmille sääkoodeille
         const saaKaannokset = {
-            "clearsky": "Selkeää",
-            "fair": "Melko selkeää",
-            "partlycloudy": "Puolipilvistä",
-            "cloudy": "Pilvistä",
-            "lightrain": "Heikkoa vesisadetta",
-            "rain": "Vesisadetta",
-            "heavyrain": "Rankkasadetta",
-            "lightrainshowers": "Heikkoja sadekuuroja",
-            "rainshowers": "Sadekuuroja",
-            "heavyrainshowers": "Voimakkaita sadekuuroja",
-            "thunder": "Ukosta",
-            "snow": "Lumisadetta",
-            "sleet": "Räntäsadetta",
-            "fog": "Sumua"
+            "clearsky": "Selkeää", "fair": "Melko selkeää", "partlycloudy": "Puolipilvistä",
+            "cloudy": "Pilvistä", "lightrain": "Heikkoa vesisadetta", "rain": "Vesisadetta",
+            "heavyrain": "Rankkasadetta", "lightrainshowers": "Heikkoja sadekuuroja",
+            "rainshowers": "Sadekuuroja", "heavyrainshowers": "Voimakkaita sadekuuroja",
+            "thunder": "Ukkosta", "snow": "Lumisadetta", "sleet": "Räntäsadetta", "fog": "Sumua"
         };
 
         async function haeKoordinaatit(paikka) {
@@ -119,49 +119,47 @@
         async function haeYrSaa(lat, lon) {
             var pyoristettyLat = lat.toFixed(4);
             var pyoristettyLon = lon.toFixed(4);
-            
             var url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${pyoristettyLat}&lon=${pyoristettyLon}`;
             
             try {
                 var vastaus = await fetch(url, {
-                    headers: {
-                        // HUOM: Muuta tähän alle oma sähköpostisi yr.no:n sääntöjen mukaisesti!
-                        'User-Agent': 'MotoristinSaareitit/1.0 (motoristinsaapalvelu@gmail.com)'
-                    }
+                    headers: { 'User-Agent': 'MotoristinSaareitit/1.0 (motoristinsaapalvelu@gmail.com)' }
                 });
-                var data = await vastaus.json();
-                return data;
+                return await vastaus.json();
             } catch (e) {
                 console.error("Säänhaku epäonnistui:", e);
                 return null;
             }
         }
 
-        function tulkitseSaa(yrData) {
+        function tulkitseSaaTulevaisuudessa(yrData, tunnitTästäHetkestä) {
             if (!yrData || !yrData.properties || !yrData.properties.timeseries) return null;
             
-            var nykyhetki = yrData.properties.timeseries[0];
-            var data1h = nykyhetki.data.next_1_hours;
+            var aikasarja = yrData.properties.timeseries;
+            var valittuEnnuste = aikasarja[tunnitTästäHetkestä] || aikasarja[0];
             
-            var lampotila = nykyhetki.data.instant.details.air_temperature;
+            var data1h = valittuEnnuste.data.next_1_hours;
+            var lampotila = valittuEnnuste.data.instant.details.air_temperature;
             var saaKoodi = data1h ? data1h.summary.symbol_code : "tuntematon";
             var sademaara = data1h ? data1h.details.precipitation_amount : 0;
 
-            // Poistetaan sääkoodista mahdolliset lisäosat kuten 'polartwilight' tai 'day'/'night'
             var puhdasKoodi = saaKoodi.split('_')[0];
-
-            // Etsitään suomennos. Jos sitä ei löydy, käytetään raakaa koodia
             var suomiKuvaus = saaKaannokset[puhdasKoodi] || saaKoodi;
+
+            var kelloIsoString = valittuEnnuste.time; 
+            var kello = new Date(kelloIsoString).toLocaleTimeString('fi-FI', {hour: '2-digit', minute:'2-digit'});
 
             return {
                 teksti: `${suomiKuvaus}, ${Math.round(lampotila)}°C`,
-                sade: sademaara
+                sade: sademaara,
+                aika: kello
             };
         }
 
         async function haeReitti() {
             var lahtoPaikka = document.getElementById('start').value;
             var maaranPaikka = document.getElementById('end').value;
+            var lahtoViiveTunnit = parseInt(document.getElementById('startTime').value);
             var statusKentta = document.getElementById('status');
             var infoLaatikko = document.getElementById('info-box');
 
@@ -180,7 +178,7 @@
                 return;
             }
 
-            statusKentta.innerText = "Haetaan reittiä ja sääolosuhteita...";
+            statusKentta.innerText = "Lasketaan tarkkaa sääreittiä...";
 
             var reittiData = await haeTieReitti(lahtoKoord, maaranKoord);
             if (!reittiData) {
@@ -189,51 +187,51 @@
             }
 
             var tiePisteet = reittiData.geometry.coordinates.map(piste => [piste[1], piste[0]]);
-            var puoliValiKoord = tiePisteet[Math.floor(tiePisteet.length / 2)];
-
-            var rawLahto = await haeYrSaa(lahtoKoord[0], lahtoKoord[1]);
-            var rawPuoli = await haeYrSaa(puoliValiKoord[0], puoliValiKoord[1]);
-            var rawMaali = await haeYrSaa(maaranKoord[0], maaranKoord[1]);
-
-            var saaLahto = tulkitseSaa(rawLahto);
-            var saaPuoli = tulkitseSaa(rawPuoli);
-            var saaMaali = tulkitseSaa(rawMaali);
-
+            
+            // Piirretään reittiviiva kartalle
             reittiViiva = L.polyline(tiePisteet, {color: '#ff9800', weight: 5}).addTo(map);
             map.fitBounds(reittiViiva.getBounds(), {padding: [50, 50]});
 
-            var tLahto = saaLahto ? `${saaLahto.teksti} (Sade: ${saaLahto.sade} mm)` : "Ei dataa";
-            var tPuoli = saaPuoli ? `${saaPuoli.teksti} (Sade: ${saaPuoli.sade} mm)` : "Ei dataa";
-            var tMaali = saaMaali ? `${saaMaali.teksti} (Sade: ${saaMaali.sade} mm)` : "Ei dataa";
-
-            merkit.push(L.marker(lahtoKoord).addTo(map).bindPopup(`<b>Lähtö: ${lahtoPaikka}</b><br>${tLahto}`));
-            merkit.push(L.marker(puoliValiKoord).addTo(map).bindPopup(`<b>Puoliväli</b><br>${tPuoli}`));
-            merkit.push(L.marker(maaranKoord).addTo(map).bindPopup(`<b>Maali: ${maaranPaikka}</b><br>${tMaali}`));
-
+            var matkaAikaMinuutit = Math.round(reittiData.duration / 60);
             var etaisyysKm = (reittiData.distance / 1000).toFixed(1);
-            var aikaMin = Math.round(reittiData.duration / 60);
-            var aikaTeksti = aikaMin > 60 ? `${Math.floor(aikaMin/60)} t ${aikaMin%60} min` : `${aikaMin} min`;
+            var aikaTeksti = matkaAikaMinuutit > 60 ? `${Math.floor(matkaAikaMinuutit/60)} t ${matkaAikaMinuutit%60} min` : `${matkaAikaMinuutit} min`;
 
-            function sataako(saa) { return saa && saa.sade > 0; }
-
+            // ALKUSETUKSET 30 MINUUTIN VÄLEILLE
+            var pisteidenMaara = tiePisteet.length;
+            
+            // Lasketaan kuinka monta 30 min pätkää matkaan mahtuu
+            var osioidenMaara = Math.max(1, Math.round(matkaAikaMinuutit / 30)); 
+            
             infoLaatikko.innerHTML = `
                 <strong>Matkatiedot:</strong><br>
                 📋 ${etaisyysKm} km | ⏱️ ${aikaTeksti}<br><br>
-                <strong>Sää reitillä (yr.no):</strong>
-                <div class="weather-info ${sataako(saaLahto) ? 'rainy' : ''}">
-                    <strong>Lähtö:</strong> ${tLahto}
-                </div>
-                <div class="weather-info ${sataako(saaPuoli) ? 'rainy' : ''}">
-                    <strong>Puoliväli:</strong> ${tPuoli}
-                </div>
-                <div class="weather-info ${sataako(saaMaali) ? 'rainy' : ''}">
-                    <strong>Maali:</strong> ${tMaali}
-                </div>
+                <strong>Sääennuste matkan varrelta (30 min välein):</strong>
+                <div id="weather-list"></div>
             `;
             infoLaatikko.style.display = "block";
-            statusKentta.innerText = "Sää haettu onnistuneesti yr.no -palvelusta!";
-        }
-    </script>
+            var saaListaElementti = document.getElementById('weather-list');
 
-</body>
-</html>
+            // Käydään reitti läpi 30 minuutin hyppäyksin
+            for (var i = 0; i <= osioidenMaara; i++) {
+                // Lasketaan suhteellinen paikka reitillä (0.0 = alku, 1.0 = loppu)
+                var osuus = i / osioidenMaara;
+                var pisteIndeksi = Math.floor(osuus * (pisteidenMaara - 1));
+                var koordinaatit = tiePisteet[pisteIndeksi];
+
+                // Lasketaan kuinka monta minuuttia/tuntia lähdöstä on kulunut tähän pisteeseen
+                var kulunutAikaMinuutit = osuus * matkaAikaMinuutit;
+                var kokonaisViiveTunnit = lahtoViiveTunnit + Math.round(kulunutAikaMinuutit / 60);
+
+                statusKentta.innerText = `Haetaan säädataa pisteelle ${i + 1}/${osioidenMaara + 1}...`;
+
+                // Haetaan sää tähän pisteeseen
+                var rawSaa = await haeYrSaa(koordinaatit[0], koordinaatit[1]);
+                var saa = tulkitseSaaTulevaisuudessa(rawSaa, kokonaisViiveTunnit);
+
+                if (saa) {
+                    var pisteenNimi = i === 0 ? "Lähtö" : (i === osioidenMaara ? "Perillä" : `${Math.round(kulunutAikaMinuutit)} min ajettu`);
+                    var sateenVariLuokka = saa.sade > 0 ? 'rainy' : '';
+                    var sääTekstiMuotoilu = `${saa.teksti} (Sade: ${saa.sade} mm)`;
+
+                    // Lisätään merkki kartalle
+                    var marker = L.marker(koordinaatit).addTo
