@@ -8,6 +8,9 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
     <style>
+        /* Varmistetaan että elementtien koot lasketaan oikein mobiilissa */
+        * { box-sizing: border-box; }
+
         body, html {
             margin: 0; padding: 0; height: 100%; width: 100%;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -25,18 +28,18 @@
         input, select {
             background-color: #2d2d2d; border: 1px solid #444;
             color: #fff; padding: 10px; border-radius: 5px; font-size: 1rem;
+            width: 100%;
         }
         input:focus, select:focus { border-color: #ff9800; outline: none; }
         button {
             background-color: #ff9800; color: #121212; border: none;
             padding: 12px; border-radius: 5px; font-weight: bold;
             font-size: 1rem; cursor: pointer; transition: background 0.2s;
-            margin-top: 10px;
+            margin-top: 10px; width: 100%;
         }
         button:hover { background-color: #e65100; }
         #status { color: #ffb74d; font-size: 0.9rem; font-style: italic; }
         
-        /* Suosituslaatikko */
         #recommendation-box {
             padding: 12px; border-radius: 5px; font-size: 0.95rem;
             font-weight: bold; display: none; margin-top: 5px;
@@ -53,6 +56,22 @@
         }
         .rainy { border-left-color: #2196f3 !important; background: #263238; }
         #map { flex-grow: 1; height: 100%; }
+
+        /* --- MOBIILIASENTELU (Käynnistyy kun ruutu on kapea) --- */
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column; /* Muuttaa rinnakkaisen asettelun päällekkäiseksi */
+            }
+            #sidebar {
+                width: 100%;
+                height: 45%; /* Vie vajaa puolet näytön korkeudesta */
+                box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            }
+            #map {
+                width: 100%;
+                height: 55%; /* Kartta ottaa loput tilasta haltuun */
+            }
+        }
     </style>
 </head>
 <body>
@@ -221,7 +240,6 @@
             var etaisyysKm = (reittiData.distance / 1000).toFixed(1);
             var aikaTeksti = matkaAikaMinuutit > 60 ? `${Math.floor(matkaAikaMinuutit/60)} t ${matkaAikaMinuutit%60} min` : `${matkaAikaMinuutit} min`;
 
-            // Luodaan tarkastuspisteet (0h, 1h... ja määränpää)
             var pisteet = [];
             pisteet.push({ indeksi: 0, nimi: "Lähtöpaikka", viive: 0 });
             
@@ -241,7 +259,6 @@
 
             statusKentta.innerText = "Ladataan sääennusteita ja optimoidaan aikataulua...";
 
-            // Haetaan kaikkien pisteiden raaka säädata valmiiksi muistiin yhdellä kertaa
             var pisteidenSaaDatat = [];
             for (var p of pisteet) {
                 var koord = tiePisteet[p.indeksi];
@@ -249,8 +266,6 @@
                 pisteidenSaaDatat.push(sData);
             }
 
-            // --- ÄLYKÄS AIKATAULUN VERTAILU ---
-            // Lasketaan kokonaissademäärä kolmelle eri skenaariolle: Valittu aika, +1h ja +2h
             var skenaariot = [valittuViiveTunnit, valittuViiveTunnit + 1, valittuViiveTunnit + 2];
             var skenaarioTulokset = [];
 
@@ -270,11 +285,9 @@
                 skenaarioTulokset.push({ viive: viive, kokonaisSade: kokonaisSade, saas: tulkitutSäät });
             }
 
-            // Valitaan paras (vähiten sadetta)
-            var valittuSkenaario = skenaarioTulokset[0]; // Nykyinen valinta
+            var valittuSkenaario = skenaarioTulokset[0];
             var parasSkenaario = skenaarioTulokset.reduce((prev, current) => (prev.kokonaisSade <= current.kokonaisSade) ? prev : current);
 
-            // Tulostetaan suositusteksti
             suositusLaatikko.style.display = "block";
             if (parasSkenaario.viive === valittuViiveTunnit) {
                 suositusLaatikko.style.color = "#4caf50";
@@ -287,7 +300,6 @@
                 suositusLaatikko.innerHTML = `⚠️ Suositus: Siirrä lähtöä +${tuntiEro} tunti(a) eteenpäin! Vältät sillä sateita matkan varrella.`;
             }
 
-            // Piirretään valitun skenaarion sää tiedot näkyviin (kartta ja lista)
             infoLaatikko.innerHTML = `
                 <strong>Matkatiedot:</strong><br>
                 📋 ${etaisyysKm} km | ⏱️ ${aikaTeksti}<br><br>
