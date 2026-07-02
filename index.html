@@ -83,7 +83,7 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
-        // Alustetaan kartta
+        // Alustetaan kartta turvallisesti heti alussa
         var map = L.map('map').setView([62.5, 26], 6);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -101,7 +101,6 @@
             "thunder": "Ukkosta", "snow": "Lumisadetta", "sleet": "Räntäsadetta", "fog": "Sumua"
         };
 
-        // Apufunktio pienen tauon pitämiseen säähakujen välissä (estää yr.no tukkeutumisen)
         function odota(ms) {
             return new Promise(resolve => setTimeout(resolve, ms));
         }
@@ -152,11 +151,11 @@
             return null;
         }
 
-        function tulkitseSaaTulevaisuudessa(yrData, tunnitTästäHetkestä) {
+        function tulkitseSaaTulevaisuudessa(yrData, tunnitTastaHetkesta) {
             if (!yrData || !yrData.properties || !yrData.properties.timeseries) return null;
             
             var aikasarja = yrData.properties.timeseries;
-            var valittuEnnuste = aikasarja[tunnitTästäHetkestä] || aikasarja[0];
+            var valittuEnnuste = aikasarja[tunnitTastaHetkesta] || aikasarja[0];
             
             var data1h = valittuEnnuste.data.next_1_hours;
             var lampotila = valittuEnnuste.data.instant.details.air_temperature;
@@ -186,9 +185,40 @@
             statusKentta.innerText = "Etsitään paikkoja...";
             infoLaatikko.style.display = "none";
 
-            // Tyhjennetään vanhat
             if (reittiViiva) map.removeLayer(reittiViiva);
             merkit.forEach(m => map.removeLayer(m));
             merkit = [];
 
-            var lahtoKoord = await haeKoordina
+            var lahtoKoord = await haeKoordinaatit(lahtoPaikka);
+            var maaranKoord = await haeKoordinaatit(maaranPaikka);
+
+            if (!lahtoKoord || !maaranKoord) {
+                statusKentta.innerText = "Virhe: Paikkaa ei löytynyt.";
+                return;
+            }
+
+            statusKentta.innerText = "Lasketaan reittiä...";
+
+            var reittiData = await haeTieReitti(lahtoKoord, maaranKoord);
+            if (!reittiData) {
+                statusKentta.innerText = "Virhe: Reittiä ei voitu laskea.";
+                return;
+            }
+
+            var tiePisteet = reittiData.geometry.coordinates.map(piste => [piste[1], piste[0]]);
+            
+            reittiViiva = L.polyline(tiePisteet, {color: '#ff9800', weight: 5}).addTo(map);
+            map.fitBounds(reittiViiva.getBounds(), {padding: [50, 50]});
+
+            var matkaAikaMinuutit = Math.round(reittiData.duration / 60);
+            var etaisyysKm = (reittiData.distance / 1000).toFixed(1);
+            var aikaTeksti = matkaAikaMinuutit > 60 ? `${Math.floor(matkaAikaMinuutit/60)} t ${matkaAikaMinuutit%60} min` : `${matkaAikaMinuutit} min`;
+
+            var pisteidenMaara = tiePisteet.length;
+            var osioidenMaara = Math.max(1, Math.round(matkaAikaMinuutit / 30)); 
+            
+            infoLaatikko.innerHTML = `
+                <strong>Matkatiedot:</strong><br>
+                📋 ${etaisyysKm} km | ⏱️ ${aikaTeksti}<br><br>
+                <strong>Sääennuste matkan varrelta (30 min välein):</strong>
+                <div id
